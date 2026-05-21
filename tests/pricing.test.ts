@@ -54,4 +54,25 @@ describe('pricing', () => {
   it('returns zero for zero tokens', () => {
     expect(estimateCost('anthropic', 'claude-sonnet-4-6', 0, 0)).toBe(0);
   });
+
+  describe('longest-match (regression: gpt-4o vs gpt-4o-mini)', () => {
+    it('prices gpt-4o-mini at gpt-4o-mini rates, not gpt-4o', () => {
+      // gpt-4o-mini: (0.15, 0.6)
+      // If matched as gpt-4o, would be (2.5, 10.0) — 16x higher.
+      expect(estimateCost('openai', 'gpt-4o-mini', 1_000_000, 1_000_000)).toBeCloseTo(0.75, 6);
+    });
+
+    it('prices o1-mini at o1-mini rates, not o1', () => {
+      // o1-mini: (3.0, 12.0), o1: (15.0, 60.0)
+      expect(estimateCost('openai', 'o1-mini', 1_000_000, 1_000_000)).toBeCloseTo(15.0, 6);
+    });
+
+    it('still prices gpt-4o at gpt-4o rates', () => {
+      expect(estimateCost('openai', 'gpt-4o', 1_000_000, 1_000_000)).toBeCloseTo(12.5, 6);
+    });
+
+    it('still prices o1 at o1 rates', () => {
+      expect(estimateCost('openai', 'o1', 1_000_000, 1_000_000)).toBeCloseTo(75.0, 6);
+    });
+  });
 });

@@ -1,6 +1,6 @@
 {
   "name": "affixly-surge-sdk",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Lightweight cost-attribution wrapper for the Anthropic, OpenAI, and Google Gemini SDKs.",
   "type": "module",
   "main": "./dist/index.cjs",

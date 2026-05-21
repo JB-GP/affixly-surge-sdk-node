@@ -39,9 +39,13 @@ export function estimateCost(
   inputTokens: number,
   outputTokens: number,
 ): number {
+  // Sort keys longest-first so e.g. "gpt-4o-mini" isn't matched as "gpt-4o"
+  // by iteration order. Both keys substring-match the model name; longest
+  // match wins.
   const providerTable = PRICING[provider as Provider] ?? {};
+  const entries = Object.entries(providerTable).sort((a, b) => b[0].length - a[0].length);
   let rates: Rate = DEFAULT_PRICING;
-  for (const [key, r] of Object.entries(providerTable)) {
+  for (const [key, r] of entries) {
     if (model.includes(key)) {
       rates = r;
       break;
