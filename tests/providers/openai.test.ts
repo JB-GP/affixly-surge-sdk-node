@@ -64,6 +64,110 @@ describe('OpenAI wrapper', () => {
     });
   });
 
+  describe('streaming', () => {
+    function makeStreamChunks() {
+      // OpenAI chunks: content first (no usage), then a final chunk with
+      // usage populated because we forced stream_options.include_usage=true.
+      return [
+        { id: 'c1', model: 'gpt-4o', choices: [{ delta: { content: 'Hi' }, index: 0 }] },
+        { id: 'c1', model: 'gpt-4o', choices: [{ delta: { content: '!' }, index: 0 }] },
+        {
+          id: 'c1',
+          model: 'gpt-4o',
+          choices: [],
+          usage: { prompt_tokens: 18, completion_tokens: 5, total_tokens: 23 },
+        },
+      ];
+    }
+
+    function asyncIterable<T>(items: T[]): AsyncIterable<T> {
+      return {
+        async *[Symbol.asyncIterator]() {
+          for (const item of items) yield item;
+        },
+      };
+    }
+
+    it('injects stream_options.include_usage=true when caller did not set it', async () => {
+      const streamingCreate = vi.fn(async (_args: object) => asyncIterable(makeStreamChunks()));
+      const fakeClient = { chat: { completions: { create: streamingCreate } } };
+      const wrapped = wrapOpenAIClient(fakeClient);
+
+      const stream = await wrapped.chat.completions.create({
+        model: 'gpt-4o',
+        messages: [],
+        stream: true,
+      } as object);
+      for await (const _c of stream as AsyncIterable<unknown>) {
+        /* drain */
+      }
+
+      expect(streamingCreate.mock.calls[0]![0].stream_options).toEqual({ include_usage: true });
+    });
+
+    it('merges with existing stream_options (preserving other options, forcing include_usage)', async () => {
+      const streamingCreate = vi.fn(async (_args: object) => asyncIterable(makeStreamChunks()));
+      const fakeClient = { chat: { completions: { create: streamingCreate } } };
+      const wrapped = wrapOpenAIClient(fakeClient);
+
+      await wrapped.chat.completions.create({
+        model: 'gpt-4o',
+        messages: [],
+        stream: true,
+        stream_options: { include_usage: false, other_opt: 'keep_me' },
+      } as object);
+
+      const passed = streamingCreate.mock.calls[0]![0].stream_options;
+      expect(passed.include_usage).toBe(true);
+      expect(passed.other_opt).toBe('keep_me');
+    });
+
+    it('reports cumulative usage from the final chunk', async () => {
+      const streamingCreate = vi.fn(async (_args: object) => asyncIterable(makeStreamChunks()));
+      const fakeClient = { chat: { completions: { create: streamingCreate } } };
+      const wrapped = wrapOpenAIClient(fakeClient);
+
+      const stream = await wrapped.chat.completions.create({
+        model: 'gpt-4o',
+        messages: [],
+        stream: true,
+      } as object);
+      for await (const _c of stream as AsyncIterable<unknown>) {
+        /* drain */
+      }
+
+      await _flushForTests();
+      const payload = JSON.parse(fetchMock.mock.calls[0]![1].body);
+      expect(payload.provider).toBe('openai');
+      expect(payload.model).toBe('gpt-4o');
+      expect(payload.input_tokens).toBe(18);
+      expect(payload.output_tokens).toBe(5);
+    });
+
+    it('streaming + surgeModel rewrites model before the provider call', async () => {
+      const streamingCreate = vi.fn(async (_args: object) => asyncIterable(makeStreamChunks()));
+      const fakeClient = { chat: { completions: { create: streamingCreate } } };
+      const wrapped = wrapOpenAIClient(fakeClient);
+
+      const stream = await wrapped.chat.completions.create({
+        model: 'gpt-4o',
+        messages: [],
+        stream: true,
+        surgeModel: 'gpt-3.5-turbo',
+      } as object);
+      for await (const _c of stream as AsyncIterable<unknown>) {
+        /* drain */
+      }
+
+      expect(streamingCreate.mock.calls[0]![0].model).toBe('gpt-3.5-turbo');
+      expect(streamingCreate.mock.calls[0]![0]).not.toHaveProperty('surgeModel');
+
+      await _flushForTests();
+      const payload = JSON.parse(fetchMock.mock.calls[0]![1].body);
+      expect(payload.requested_model).toBe('gpt-4o');
+    });
+  });
+
   it('model override: surgeModel rewrites model and emits requested_model', async () => {
     // Override-aware mock: response.model echoes the actually-called model,
     // matching real OpenAI behavior (and what the reporter reads).

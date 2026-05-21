@@ -35,6 +35,30 @@ function resolveModel(
   return { actualModel: requestedModel, overriddenFrom: undefined };
 }
 
+/**
+ * Apply Surge-specific kwargs (surgeTags, surgeModel) to the call args.
+ * Strips them from the args passed to the real provider and applies the
+ * model override if one fires.
+ *
+ * Returns the cleaned args + the metadata our reporter needs at the end.
+ */
+function prepareCallArgs<TArgs extends object>(
+  args: TArgs & SurgeOptions,
+): {
+  cleanedArgs: TArgs & { model?: string };
+  surgeTags: Record<string, string> | null;
+  overriddenFrom: string | undefined;
+} {
+  const { surgeTags, surgeModel, ...rest } = args as TArgs & SurgeOptions;
+  const cleanedArgs = rest as TArgs & { model?: string };
+  const requestedModel = typeof cleanedArgs.model === 'string' ? cleanedArgs.model : 'unknown';
+  const { actualModel, overriddenFrom } = resolveModel(requestedModel, surgeModel);
+  if (actualModel !== requestedModel) {
+    cleanedArgs.model = actualModel;
+  }
+  return { cleanedArgs, surgeTags: surgeTags ?? null, overriddenFrom };
+}
+
 export function instrumentMethod<TArgs extends object, TResult>(
   provider: Provider,
   realMethod: (args: TArgs) => Promise<TResult>,
@@ -42,14 +66,7 @@ export function instrumentMethod<TArgs extends object, TResult>(
   extractUsage: UsageExtractor,
 ): (args: TArgs & SurgeOptions) => Promise<TResult> {
   return async (args: TArgs & SurgeOptions): Promise<TResult> => {
-    const { surgeTags, surgeModel, ...rest } = args as TArgs & SurgeOptions;
-    const cleanedArgs = rest as TArgs & { model?: string };
-
-    const requestedModel = typeof cleanedArgs.model === 'string' ? cleanedArgs.model : 'unknown';
-    const { actualModel, overriddenFrom } = resolveModel(requestedModel, surgeModel);
-    if (actualModel !== requestedModel) {
-      cleanedArgs.model = actualModel;
-    }
+    const { cleanedArgs, surgeTags, overriddenFrom } = prepareCallArgs(args);
 
     const response = await realMethod.call(thisArg, cleanedArgs as TArgs);
 
@@ -61,7 +78,7 @@ export function instrumentMethod<TArgs extends object, TResult>(
           usage.model,
           usage.inputTokens,
           usage.outputTokens,
-          surgeTags ?? null,
+          surgeTags,
           overriddenFrom,
         );
       }
@@ -70,6 +87,98 @@ export function instrumentMethod<TArgs extends object, TResult>(
     }
 
     return response;
+  };
+}
+
+/**
+ * Streaming counterpart to instrumentMethod.
+ *
+ * The real method must return an `AsyncIterable<TChunk>` (or a Promise of
+ * one). We wrap it with a Proxy that yields each chunk to the caller while
+ * a `StreamCollector` accumulates the running totals from those chunks.
+ * When iteration completes — successfully OR via early break / exception —
+ * the collected usage is reported exactly once.
+ *
+ * The Proxy preserves all helper methods on the original stream object
+ * (Anthropic's MessageStream has `.finalMessage()`, `.on()`, etc.); only
+ * `[Symbol.asyncIterator]` is intercepted.
+ */
+export interface StreamUsageState {
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+}
+
+export interface StreamCollector<TChunk> {
+  /** Build the initial accumulator state. Called once at stream start. */
+  init(args: object): StreamUsageState;
+  /** Mutate the state with info from a chunk. */
+  onChunk(state: StreamUsageState, chunk: TChunk): void;
+}
+
+export function instrumentStreamMethod<
+  TArgs extends object,
+  TChunk,
+  TStream extends AsyncIterable<TChunk>,
+>(
+  provider: Provider,
+  realMethod: (args: TArgs) => Promise<TStream> | TStream,
+  thisArg: unknown,
+  collector: StreamCollector<TChunk>,
+  preCall?: (args: TArgs & { model?: string }) => void,
+): (args: TArgs & SurgeOptions) => Promise<TStream> {
+  return async (args: TArgs & SurgeOptions): Promise<TStream> => {
+    const { cleanedArgs, surgeTags, overriddenFrom } = prepareCallArgs(args);
+    if (preCall) preCall(cleanedArgs);
+
+    const realStream = await Promise.resolve(realMethod.call(thisArg, cleanedArgs as TArgs));
+
+    const state = collector.init(cleanedArgs);
+    let reported = false;
+    const report = () => {
+      if (reported) return;
+      reported = true;
+      try {
+        if (state.inputTokens > 0 || state.outputTokens > 0) {
+          reportUsage(
+            provider,
+            state.model,
+            state.inputTokens,
+            state.outputTokens,
+            surgeTags,
+            overriddenFrom,
+          );
+        }
+      } catch (err) {
+        logger.debug(`Failed to report ${provider} streaming usage`, err);
+      }
+    };
+
+    const trackedIterator = async function* (): AsyncGenerator<TChunk> {
+      try {
+        for await (const chunk of realStream as AsyncIterable<TChunk>) {
+          try {
+            collector.onChunk(state, chunk);
+          } catch (err) {
+            logger.debug(`Failed to collect ${provider} stream chunk`, err);
+          }
+          yield chunk;
+        }
+      } finally {
+        // try/finally so early break or thrown errors still report whatever
+        // we managed to collect — partial usage is correct usage.
+        report();
+      }
+    };
+
+    return new Proxy(realStream as object, {
+      get(target, prop, receiver) {
+        if (prop === Symbol.asyncIterator) {
+          return () => trackedIterator();
+        }
+        return Reflect.get(target, prop, receiver);
+      },
+    }) as TStream;
   };
 }
 

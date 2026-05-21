@@ -100,6 +100,7 @@ For every successful provider call, a JSON event like this is POSTed to `{surgeA
 - `feature` and `customer_id` come from the merged `defaultTags` + per-call `surgeTags` (per-call wins on conflicts).
 - Tag values longer than 256 chars are truncated with a warning.
 - When a model override fires (see [Model overrides](#5-model-overrides)), the event also includes `requested_model` and `requested_cost_usd` (the cost the original model would have incurred). These fields are omitted entirely when no override occurred.
+- For streaming calls (0.3.0+), the same event shape is reported — usage is captured from the stream and reported when iteration completes.
 
 ## 5. Model overrides
 
@@ -195,8 +196,46 @@ const client = new Anthropic({ apiKey: '...' });
 
 No further code changes required.
 
-## 8. Not in v1
+## 8. Streaming
 
-- Streaming responses (`messages.stream()`, `chat.completions.create({ stream: true })`, `generateContentStream`) are passed through but not tracked.
+Streaming is fully tracked as of 0.3.0. Same `surgeTags` + `surgeModel` work; usage is captured as chunks flow through and reported when iteration completes.
+
+```ts
+// Anthropic streaming
+const stream = await client.messages.create({
+  model: 'claude-sonnet-4-6',
+  max_tokens: 1024,
+  messages: [...],
+  stream: true,
+  surgeTags: { feature: 'chat' },
+});
+for await (const event of stream) { /* ... */ }
+// Usage reported after the loop exits
+
+// OpenAI streaming — SDK auto-injects stream_options.include_usage=true
+const stream = await client.chat.completions.create({
+  model: 'gpt-4o',
+  messages: [...],
+  stream: true,
+  surgeTags: { feature: 'chat' },
+});
+for await (const chunk of stream) { /* ... */ }
+
+// Gemini streaming
+const stream = await client.models.generateContentStream({
+  model: 'gemini-2.5-flash',
+  contents: 'Hello',
+  surgeTags: { feature: 'chat' },
+});
+for await (const chunk of stream) { /* ... */ }
+```
+
+**Notes:**
+- The SDK forces `stream_options.include_usage=true` for OpenAI streams so the final chunk carries `usage`. If you iterate raw chunks you'll see one extra final chunk with `usage` populated — same shape as if you'd set the option yourself.
+- For Anthropic, both `messages.create({ stream: true })` (the `Stream` shape) and `messages.stream({})` (the `MessageStream` shape with `.finalMessage()`, `.on('text', cb)`, etc.) are tracked. Helper methods on the latter are preserved by the wrapping Proxy.
+- Early `break` from iteration still reports whatever was collected — partial usage is correct usage.
+
+## 9. Not in v1
+
 - Browser / edge runtime build. Node 18+ only.
 - Stripe integration (lives on the Surge backend, not the SDK).

@@ -1,4 +1,11 @@
-import { instrumentMethod, getProp, toInt } from './wrap.js';
+import {
+  instrumentMethod,
+  instrumentStreamMethod,
+  getProp,
+  toInt,
+  type StreamCollector,
+  type StreamUsageState,
+} from './wrap.js';
 import { loadPeerModule } from './_load.js';
 
 export interface OpenAICompletions {
@@ -29,6 +36,46 @@ function extractOpenAIUsage(
   };
 }
 
+/**
+ * Stream collector for OpenAI chunks. With stream_options.include_usage=true
+ * (which we inject — see preCall below), the very last chunk carries the
+ * cumulative `usage` object. Earlier chunks carry only `model` + delta
+ * content, so we keep updating model from every chunk that has it and
+ * only seize usage when it appears.
+ */
+const openaiStreamCollector: StreamCollector<unknown> = {
+  init(args: object): StreamUsageState {
+    const model = getProp(args, 'model');
+    return {
+      model: typeof model === 'string' ? model : 'unknown',
+      inputTokens: 0,
+      outputTokens: 0,
+    };
+  },
+  onChunk(state, chunk) {
+    const mdl = getProp(chunk, 'model');
+    if (typeof mdl === 'string') state.model = mdl;
+    const usage = getProp(chunk, 'usage');
+    if (usage) {
+      const inp = toInt(getProp(usage, 'prompt_tokens'));
+      if (inp > 0) state.inputTokens = inp;
+      const out = toInt(getProp(usage, 'completion_tokens'));
+      if (out > 0) state.outputTokens = out;
+    }
+  },
+};
+
+/**
+ * Inject `stream_options.include_usage=true` so the OpenAI Stream emits a
+ * final chunk carrying cumulative usage. Preserves any other stream_options
+ * the caller set; flips include_usage to true even if the caller set it to
+ * false (they opted into Surge by using the wrapper).
+ */
+function ensureIncludeUsage(args: object): void {
+  const a = args as { stream_options?: Record<string, unknown> };
+  a.stream_options = { ...(a.stream_options ?? {}), include_usage: true };
+}
+
 export function wrapOpenAIClient<T extends OpenAILike>(client: T): T {
   return new Proxy(client, {
     get(target, prop, receiver) {
@@ -48,12 +95,25 @@ export function wrapOpenAIClient<T extends OpenAILike>(client: T): T {
                     const realCreate = (
                       compTarget.create as (args: object) => Promise<unknown>
                     ).bind(compTarget);
-                    return instrumentMethod(
+                    const trackedNonStream = instrumentMethod(
                       'openai',
                       realCreate,
                       compTarget,
                       extractOpenAIUsage,
                     );
+                    const trackedStream = instrumentStreamMethod<
+                      object,
+                      unknown,
+                      AsyncIterable<unknown>
+                    >(
+                      'openai',
+                      realCreate as (args: object) => Promise<AsyncIterable<unknown>>,
+                      compTarget,
+                      openaiStreamCollector,
+                      ensureIncludeUsage,
+                    );
+                    return (args: object & { stream?: boolean }) =>
+                      args && args.stream === true ? trackedStream(args) : trackedNonStream(args);
                   }
                   return Reflect.get(compTarget, compProp, compReceiver);
                 },

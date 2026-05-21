@@ -107,11 +107,11 @@ The same config keys can be set via env vars as fallback:
 
 | Provider | Import | What's tracked |
 |---|---|---|
-| Anthropic | `import { anthropic } from 'affixly-surge-sdk'` | `messages.create()` |
-| OpenAI | `import { openai } from 'affixly-surge-sdk'` | `chat.completions.create()` |
-| Google Gemini | `import { gemini } from 'affixly-surge-sdk'` | `models.generateContent()` |
+| Anthropic | `import { anthropic } from 'affixly-surge-sdk'` | `messages.create()`, `messages.create({stream: true})`, `messages.stream()` |
+| OpenAI | `import { openai } from 'affixly-surge-sdk'` | `chat.completions.create()`, `chat.completions.create({stream: true})` |
+| Google Gemini | `import { gemini } from 'affixly-surge-sdk'` | `models.generateContent()`, `models.generateContentStream()` |
 
-**Streaming is not tracked in v1.**
+**Streaming note for OpenAI:** the SDK forces `stream_options.include_usage=true` on streaming calls so the final chunk carries cumulative usage. Callers iterating raw chunks will see one extra final chunk with `usage` populated — same shape as if you'd set it yourself.
 
 ### Gemini SDK note
 

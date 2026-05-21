@@ -83,6 +83,86 @@ describe('Gemini wrapper', () => {
     });
   });
 
+  describe('streaming', () => {
+    function makeStreamChunks() {
+      // Gemini stream: content chunks first, final chunk carries cumulative
+      // usage_metadata. Token counts ARE cumulative — final chunk's values
+      // are the totals.
+      return [
+        {
+          candidates: [{ content: { parts: [{ text: 'Hi' }] } }],
+          usageMetadata: { promptTokenCount: 7, candidatesTokenCount: 1 },
+        },
+        {
+          candidates: [{ content: { parts: [{ text: '!' }] } }],
+          usageMetadata: { promptTokenCount: 7, candidatesTokenCount: 2 },
+        },
+        {
+          candidates: [{ content: { parts: [] }, finishReason: 'STOP' }],
+          usageMetadata: { promptTokenCount: 7, candidatesTokenCount: 2 },
+        },
+      ];
+    }
+
+    function asyncIterable<T>(items: T[]): AsyncIterable<T> {
+      return {
+        async *[Symbol.asyncIterator]() {
+          for (const item of items) yield item;
+        },
+      };
+    }
+
+    it('wraps generateContentStream and reports cumulative usage from the final chunk', async () => {
+      const streamingGen = vi.fn(async (_args: object) => asyncIterable(makeStreamChunks()));
+      const fakeClient = {
+        models: {
+          generateContent: realGen,
+          generateContentStream: streamingGen,
+        },
+      };
+      const wrapped = wrapGeminiClient(fakeClient);
+
+      const stream = await wrapped.models.generateContentStream({
+        model: 'gemini-1.5-flash',
+        contents: 'hi',
+      } as object);
+      for await (const _c of stream as AsyncIterable<unknown>) {
+        /* drain */
+      }
+
+      await _flushForTests();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const payload = JSON.parse(fetchMock.mock.calls[0]![1].body);
+      expect(payload.provider).toBe('gemini');
+      expect(payload.model).toBe('gemini-1.5-flash');
+      expect(payload.input_tokens).toBe(7);
+      expect(payload.output_tokens).toBe(2);
+    });
+
+    it('strips surgeTags and surgeModel from streaming args', async () => {
+      const streamingGen = vi.fn(async (_args: object) => asyncIterable(makeStreamChunks()));
+      const fakeClient = {
+        models: {
+          generateContent: realGen,
+          generateContentStream: streamingGen,
+        },
+      };
+      const wrapped = wrapGeminiClient(fakeClient);
+
+      await wrapped.models.generateContentStream({
+        model: 'gemini-2.5-pro',
+        contents: 'hi',
+        surgeTags: { feature: 'demo' },
+        surgeModel: 'gemini-2.5-flash',
+      } as object);
+
+      const passed = streamingGen.mock.calls[0]![0];
+      expect(passed).not.toHaveProperty('surgeTags');
+      expect(passed).not.toHaveProperty('surgeModel');
+      expect(passed.model).toBe('gemini-2.5-flash'); // override applied
+    });
+  });
+
   it('model override: surgeModel rewrites model and emits requested_model', async () => {
     const fakeClient = { models: { generateContent: realGen } };
     const wrapped = wrapGeminiClient(fakeClient);

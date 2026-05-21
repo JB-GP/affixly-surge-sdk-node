@@ -1,8 +1,16 @@
-import { instrumentMethod, getProp, toInt } from './wrap.js';
+import {
+  instrumentMethod,
+  instrumentStreamMethod,
+  getProp,
+  toInt,
+  type StreamCollector,
+  type StreamUsageState,
+} from './wrap.js';
 import { loadPeerModule } from './_load.js';
 
 export interface GeminiModels {
   generateContent: (args: object) => Promise<unknown>;
+  generateContentStream?: (args: object) => unknown;
   [k: string]: unknown;
 }
 
@@ -31,6 +39,33 @@ function extractGeminiUsage(
   };
 }
 
+/**
+ * Gemini streams emit a sequence of GenerateContentResponse chunks. Token
+ * counts on usageMetadata are cumulative — the final chunk carries the
+ * authoritative totals. Model isn't always present on chunks; we seed from
+ * the request args via init() and refresh whenever a chunk does include it.
+ */
+const geminiStreamCollector: StreamCollector<unknown> = {
+  init(args: object): StreamUsageState {
+    return {
+      model: normalizeModel(getProp(args, 'model')),
+      inputTokens: 0,
+      outputTokens: 0,
+    };
+  },
+  onChunk(state, chunk) {
+    const mdl = getProp(chunk, 'model');
+    if (typeof mdl === 'string') state.model = normalizeModel(mdl);
+    const meta = getProp(chunk, 'usageMetadata');
+    if (meta) {
+      const inp = toInt(getProp(meta, 'promptTokenCount'));
+      if (inp > 0) state.inputTokens = inp;
+      const out = toInt(getProp(meta, 'candidatesTokenCount'));
+      if (out > 0) state.outputTokens = out;
+    }
+  },
+};
+
 export function wrapGeminiClient<T extends GeminiLike>(client: T): T {
   return new Proxy(client, {
     get(target, prop, receiver) {
@@ -47,6 +82,20 @@ export function wrapGeminiClient<T extends GeminiLike>(client: T): T {
                 realGen,
                 modelsTarget,
                 extractGeminiUsage,
+              );
+            }
+            if (
+              modelsProp === 'generateContentStream' &&
+              typeof modelsTarget.generateContentStream === 'function'
+            ) {
+              const realStream = (
+                modelsTarget.generateContentStream as (args: object) => unknown
+              ).bind(modelsTarget);
+              return instrumentStreamMethod<object, unknown, AsyncIterable<unknown>>(
+                'gemini',
+                realStream as (args: object) => Promise<AsyncIterable<unknown>>,
+                modelsTarget,
+                geminiStreamCollector,
               );
             }
             return Reflect.get(modelsTarget, modelsProp, modelsReceiver);
