@@ -55,6 +55,37 @@ const response = await client.messages.create({
 
 `surgeTags` is stripped from the request before it reaches the provider SDK.
 
+## Model overrides
+
+Redirect calls to a different model than the call site declares — useful for
+multi-tenant plan tiering (Starter → Haiku, Business → Opus) without touching
+every call site:
+
+```ts
+// Global rule — applies to every call the SDK intercepts
+configure({
+  surgeApiUrl: '...',
+  modelOverrides: {
+    'claude-opus-4-6': 'claude-sonnet-4-6',  // all Opus calls become Sonnet
+  },
+});
+
+// Per-call rule — wins over the global map
+const response = await client.messages.create({
+  model: 'claude-opus-4-6',                 // intent declared in code
+  max_tokens: 1024,
+  messages: [...],
+  surgeModel: getTenantModel(tenantId),     // runtime tier resolution
+  surgeTags: { feature: 'chat', customer_id: tenantId },
+});
+```
+
+The dashboard logs both the requested and actual model on every override, plus
+a "Savings from model overrides" card showing the cost delta over time.
+
+`surgeModel` and `surgeTags` are both stripped from the request before it
+reaches the provider SDK.
+
 ## Environment variables
 
 The same config keys can be set via env vars as fallback:

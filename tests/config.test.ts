@@ -80,4 +80,23 @@ describe('config', () => {
     expect(warn).not.toHaveBeenCalled();
     warn.mockRestore();
   });
+
+  it('modelOverrides defaults to empty object', () => {
+    expect(getConfig().modelOverrides).toEqual({});
+  });
+
+  it('configure() stores modelOverrides as an independent copy', () => {
+    const src = { 'claude-opus-4-6': 'claude-sonnet-4-6' };
+    configure({ modelOverrides: src });
+    expect(getConfig().modelOverrides).toEqual(src);
+    // Mutating the source object must not affect stored config
+    src['claude-opus-4-6'] = 'claude-haiku-4-5';
+    expect(getConfig().modelOverrides['claude-opus-4-6']).toBe('claude-sonnet-4-6');
+  });
+
+  it('configure() preserves prior modelOverrides when field is omitted', () => {
+    configure({ modelOverrides: { 'gpt-4o': 'gpt-4o-mini' } });
+    configure({ surgeApiKey: 'k' });
+    expect(getConfig().modelOverrides).toEqual({ 'gpt-4o': 'gpt-4o-mini' });
+  });
 });

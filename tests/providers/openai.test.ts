@@ -63,4 +63,31 @@ describe('OpenAI wrapper', () => {
       usage: { prompt_tokens: 30, completion_tokens: 8 },
     });
   });
+
+  it('model override: surgeModel rewrites model and emits requested_model', async () => {
+    // Override-aware mock: response.model echoes the actually-called model,
+    // matching real OpenAI behavior (and what the reporter reads).
+    // Using gpt-4o → gpt-3.5-turbo (non-colliding pricing keys).
+    const dynamicCreate = vi.fn().mockImplementation(async (args: { model?: string }) => ({
+      model: args.model ?? 'gpt-4o',
+      usage: { prompt_tokens: 30, completion_tokens: 8 },
+    }));
+    const fakeClient = { chat: { completions: { create: dynamicCreate } } };
+    const wrapped = wrapOpenAIClient(fakeClient);
+
+    await wrapped.chat.completions.create({
+      model: 'gpt-4o',
+      messages: [],
+      surgeModel: 'gpt-3.5-turbo',
+    } as object);
+
+    expect(dynamicCreate.mock.calls[0]![0].model).toBe('gpt-3.5-turbo');
+    expect(dynamicCreate.mock.calls[0]![0]).not.toHaveProperty('surgeModel');
+
+    await _flushForTests();
+    const payload = JSON.parse(fetchMock.mock.calls[0]![1].body);
+    expect(payload.model).toBe('gpt-3.5-turbo');
+    expect(payload.requested_model).toBe('gpt-4o');
+    expect(payload.requested_cost_usd).toBeGreaterThan(payload.cost_usd);
+  });
 });

@@ -5,6 +5,7 @@ export interface SurgeConfig {
   surgeApiKey: string | null;
   productLine: string | null;
   defaultTags: Record<string, string>;
+  modelOverrides: Record<string, string>;
 }
 
 export interface ConfigureOptions {
@@ -12,6 +13,7 @@ export interface ConfigureOptions {
   surgeApiKey?: string;
   productLine?: string;
   defaultTags?: Record<string, string>;
+  modelOverrides?: Record<string, string>;
 }
 
 function envFallbacks(): SurgeConfig {
@@ -20,6 +22,7 @@ function envFallbacks(): SurgeConfig {
     surgeApiKey: process.env.SURGE_SDK_KEY ?? null,
     productLine: process.env.SURGE_PRODUCT_LINE ?? null,
     defaultTags: {},
+    modelOverrides: {},
   };
 }
 
@@ -37,6 +40,10 @@ export function configure(options: ConfigureOptions = {}): void {
       options.defaultTags !== undefined
         ? { ...options.defaultTags }
         : currentConfig.defaultTags,
+    modelOverrides:
+      options.modelOverrides !== undefined
+        ? { ...options.modelOverrides }
+        : currentConfig.modelOverrides,
   };
   currentConfig = next;
 

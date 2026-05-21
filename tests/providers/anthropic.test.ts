@@ -108,4 +108,87 @@ describe('Anthropic wrapper', () => {
     const wrapped = wrapAnthropicClient(fakeClient);
     expect((wrapped.messages as { countTokens: () => number }).countTokens()).toBe(123);
   });
+
+  describe('model override', () => {
+    it('per-request surgeModel rewrites model and reports requested_model', async () => {
+      const fakeClient = { messages: { create: realCreate } };
+      const wrapped = wrapAnthropicClient(fakeClient);
+
+      await wrapped.messages.create({
+        model: 'claude-opus-4-6',
+        messages: [],
+        surgeModel: 'claude-sonnet-4-6',
+      } as object);
+
+      // Real method sees the rewritten model
+      expect(realCreate.mock.calls[0]![0].model).toBe('claude-sonnet-4-6');
+      expect(realCreate.mock.calls[0]![0]).not.toHaveProperty('surgeModel');
+
+      await _flushForTests();
+      const payload = JSON.parse(fetchMock.mock.calls[0]![1].body);
+      expect(payload.model).toBe('claude-sonnet-4-6');
+      expect(payload.requested_model).toBe('claude-opus-4-6');
+      // Opus = (15, 75) per 1M; 42 in + 17 out → 0.000630 + 0.001275 = 0.001905
+      expect(payload.requested_cost_usd).toBe(0.001905);
+    });
+
+    it('global modelOverrides map rewrites model when no per-request override', async () => {
+      configure({ modelOverrides: { 'claude-opus-4-6': 'claude-haiku-4-5' } });
+      const fakeClient = { messages: { create: realCreate } };
+      const wrapped = wrapAnthropicClient(fakeClient);
+
+      await wrapped.messages.create({ model: 'claude-opus-4-6', messages: [] } as object);
+
+      expect(realCreate.mock.calls[0]![0].model).toBe('claude-haiku-4-5');
+      await _flushForTests();
+      const payload = JSON.parse(fetchMock.mock.calls[0]![1].body);
+      expect(payload.requested_model).toBe('claude-opus-4-6');
+    });
+
+    it('per-request surgeModel wins over global modelOverrides', async () => {
+      configure({ modelOverrides: { 'claude-opus-4-6': 'claude-haiku-4-5' } });
+      const fakeClient = { messages: { create: realCreate } };
+      const wrapped = wrapAnthropicClient(fakeClient);
+
+      await wrapped.messages.create({
+        model: 'claude-opus-4-6',
+        messages: [],
+        surgeModel: 'claude-sonnet-4-6',
+      } as object);
+
+      expect(realCreate.mock.calls[0]![0].model).toBe('claude-sonnet-4-6');
+      await _flushForTests();
+      const payload = JSON.parse(fetchMock.mock.calls[0]![1].body);
+      expect(payload.model).toBe('claude-sonnet-4-6');
+      expect(payload.requested_model).toBe('claude-opus-4-6');
+    });
+
+    it('does not include requested_model when no override occurred', async () => {
+      const fakeClient = { messages: { create: realCreate } };
+      const wrapped = wrapAnthropicClient(fakeClient);
+
+      await wrapped.messages.create({ model: 'claude-sonnet-4-6', messages: [] } as object);
+
+      await _flushForTests();
+      const payload = JSON.parse(fetchMock.mock.calls[0]![1].body);
+      expect(payload.requested_model).toBeUndefined();
+      expect(payload.requested_cost_usd).toBeUndefined();
+    });
+
+    it('strips surgeModel from args even when value equals requested model (no-op override)', async () => {
+      const fakeClient = { messages: { create: realCreate } };
+      const wrapped = wrapAnthropicClient(fakeClient);
+
+      await wrapped.messages.create({
+        model: 'claude-sonnet-4-6',
+        messages: [],
+        surgeModel: 'claude-sonnet-4-6',
+      } as object);
+
+      expect(realCreate.mock.calls[0]![0]).not.toHaveProperty('surgeModel');
+      await _flushForTests();
+      const payload = JSON.parse(fetchMock.mock.calls[0]![1].body);
+      expect(payload.requested_model).toBeUndefined();
+    });
+  });
 });

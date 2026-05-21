@@ -82,4 +82,24 @@ describe('Gemini wrapper', () => {
       usageMetadata: { promptTokenCount: 12, candidatesTokenCount: 9 },
     });
   });
+
+  it('model override: surgeModel rewrites model and emits requested_model', async () => {
+    const fakeClient = { models: { generateContent: realGen } };
+    const wrapped = wrapGeminiClient(fakeClient);
+
+    await wrapped.models.generateContent({
+      model: 'gemini-2.5-pro',
+      contents: 'x',
+      surgeModel: 'gemini-2.5-flash',
+    } as object);
+
+    expect(realGen.mock.calls[0]![0].model).toBe('gemini-2.5-flash');
+    expect(realGen.mock.calls[0]![0]).not.toHaveProperty('surgeModel');
+
+    await _flushForTests();
+    const payload = JSON.parse(fetchMock.mock.calls[0]![1].body);
+    expect(payload.model).toBe('gemini-2.5-flash');
+    expect(payload.requested_model).toBe('gemini-2.5-pro');
+    expect(payload.requested_cost_usd).toBeGreaterThan(payload.cost_usd);
+  });
 });

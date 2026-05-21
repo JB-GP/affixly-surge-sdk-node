@@ -15,6 +15,8 @@ export interface UsageEventPayload {
   product_line: string | null;
   feature: string | null;
   customer_id: string | null;
+  requested_model?: string;
+  requested_cost_usd?: number;
 }
 
 interface PendingJob {
@@ -79,6 +81,7 @@ export function reportUsage(
   inputTokens: number,
   outputTokens: number,
   tags?: Record<string, string> | null,
+  requestedModel?: string,
 ): void {
   const cfg = getConfig();
   if (!cfg.surgeApiUrl) return;
@@ -102,6 +105,17 @@ export function reportUsage(
     feature: truncate(mergedTags['feature']),
     customer_id: truncate(mergedTags['customer_id']),
   };
+
+  if (requestedModel) {
+    const requestedCost = estimateCost(provider, requestedModel, inputTokens, outputTokens);
+    if (Number.isFinite(requestedCost)) {
+      const truncated = truncate(requestedModel);
+      if (truncated !== null) {
+        payload.requested_model = truncated;
+        payload.requested_cost_usd = Number(requestedCost.toFixed(6));
+      }
+    }
+  }
 
   const job: PendingJob = {
     url: cfg.surgeApiUrl,
