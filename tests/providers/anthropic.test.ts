@@ -322,5 +322,38 @@ describe('Anthropic wrapper', () => {
       expect(payload.input_tokens).toBe(100);
       expect(payload.output_tokens).toBe(0);
     });
+
+    it('messages.stream(): reports via finalMessage() when caller never iterates', async () => {
+      // Helper-based consumption (e.g. `.on('text')` + `await finalMessage()`).
+      // The async iterator is never used, so onChunk never runs — usage must be
+      // recovered from the accumulated final Message instead of being dropped.
+      const finalMessage = {
+        model: 'claude-sonnet-4-6',
+        usage: { input_tokens: 100, output_tokens: 42 },
+      };
+      const streamObj = {
+        ...asyncIterable(makeStreamEvents()),
+        finalMessage: vi.fn(async () => finalMessage),
+      };
+      const streamMethod = vi.fn((_args: object) => streamObj);
+      const fakeClient = { messages: { create: realCreate, stream: streamMethod } };
+      const wrapped = wrapAnthropicClient(fakeClient);
+
+      const stream = (await wrapped.messages.stream({
+        model: 'claude-sonnet-4-6',
+        messages: [{ role: 'user', content: 'hi' }],
+      } as object)) as { finalMessage: () => Promise<unknown> };
+
+      const msg = await stream.finalMessage();
+      expect(msg).toBe(finalMessage);
+
+      await _flushForTests();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const payload = JSON.parse(fetchMock.mock.calls[0]![1].body);
+      expect(payload.provider).toBe('anthropic');
+      expect(payload.model).toBe('claude-sonnet-4-6');
+      expect(payload.input_tokens).toBe(100);
+      expect(payload.output_tokens).toBe(42);
+    });
   });
 });

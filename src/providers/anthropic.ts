@@ -74,6 +74,21 @@ const anthropicStreamCollector: StreamCollector<unknown> = {
       if (out > 0) state.outputTokens = out;
     }
   },
+  // Fallback for `messages.stream()` consumed via `.on('text')` + an awaited
+  // `finalMessage()` (no async iteration): pull model + usage off the
+  // accumulated Message so we still report instead of dropping the call.
+  finalize(state, finalMessage) {
+    const mdl = getProp(finalMessage, 'model');
+    if (typeof mdl === 'string') state.model = mdl;
+    const usage = getProp(finalMessage, 'usage');
+    if (usage) {
+      const inp = toInt(getProp(usage, 'input_tokens'));
+      if (inp > 0) state.inputTokens = inp;
+      const out = toInt(getProp(usage, 'output_tokens'));
+      if (out > 0) state.outputTokens = out;
+    }
+  },
+  finalizeMethods: ['finalMessage'],
 };
 
 export function wrapAnthropicClient<T extends AnthropicLike>(client: T): T {

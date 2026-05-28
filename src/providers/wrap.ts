@@ -114,6 +114,22 @@ export interface StreamCollector<TChunk> {
   init(args: object): StreamUsageState;
   /** Mutate the state with info from a chunk. */
   onChunk(state: StreamUsageState, chunk: TChunk): void;
+  /**
+   * Optional fallback: extract usage from the value a terminal helper method
+   * resolves to (e.g. Anthropic's `finalMessage()`). Used for callers that
+   * drain the stream via helpers / event emitters rather than async iteration,
+   * which never routes chunks through `onChunk`.
+   */
+  finalize?(state: StreamUsageState, finalValue: unknown): void;
+  /**
+   * Names of terminal helper methods whose resolved value should be handed to
+   * `finalize` (e.g. ['finalMessage']). Only consulted when `finalize` is set.
+   */
+  finalizeMethods?: string[];
+}
+
+function stateIncomplete(state: StreamUsageState): boolean {
+  return state.model === 'unknown' || (state.inputTokens === 0 && state.outputTokens === 0);
 }
 
 export function instrumentStreamMethod<
@@ -171,10 +187,30 @@ export function instrumentStreamMethod<
       }
     };
 
+    const finalizeMethods = collector.finalize ? (collector.finalizeMethods ?? []) : [];
+
     return new Proxy(realStream as object, {
       get(target, prop, receiver) {
         if (prop === Symbol.asyncIterator) {
           return () => trackedIterator();
+        }
+        // Helper-based consumption (e.g. `.on('text')` + `await finalMessage()`)
+        // bypasses the async iterator, so chunks never reach `onChunk`. Hook
+        // the terminal helper to recover usage from its accumulated result.
+        if (typeof prop === 'string' && finalizeMethods.includes(prop)) {
+          const realFn = Reflect.get(target, prop, receiver);
+          if (typeof realFn === 'function') {
+            return async (...callArgs: unknown[]) => {
+              const result = await realFn.apply(target, callArgs);
+              try {
+                if (stateIncomplete(state)) collector.finalize!(state, result);
+              } catch (err) {
+                logger.debug(`Failed to finalize ${provider} stream usage`, err);
+              }
+              report();
+              return result;
+            };
+          }
         }
         return Reflect.get(target, prop, receiver);
       },
