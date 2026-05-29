@@ -168,6 +168,51 @@ describe('OpenAI wrapper', () => {
     });
   });
 
+  describe('audio transcription', () => {
+    it('reports per-minute audio cost from response.duration with 0 tokens', async () => {
+      // 120s of whisper-1 audio = 2 min * $0.006/min = $0.012
+      const transcribe = vi.fn().mockResolvedValue({ text: 'hello', duration: 120 });
+      const fakeClient = { audio: { transcriptions: { create: transcribe } } };
+      const wrapped = wrapOpenAIClient(fakeClient);
+
+      await wrapped.audio.transcriptions.create({
+        model: 'whisper-1',
+        file: 'fake',
+        surgeTags: { feature: 'transcribe_video' },
+      } as object);
+
+      const passed = transcribe.mock.calls[0]![0];
+      expect(passed).not.toHaveProperty('surgeTags');
+      expect(passed.model).toBe('whisper-1');
+
+      await _flushForTests();
+      const payload = JSON.parse(fetchMock.mock.calls[0]![1].body);
+      expect(payload.provider).toBe('openai');
+      expect(payload.model).toBe('whisper-1');
+      expect(payload.input_tokens).toBe(0);
+      expect(payload.output_tokens).toBe(0);
+      expect(payload.cost_usd).toBeCloseTo(0.012, 6);
+      expect(payload.feature).toBe('transcribe_video');
+    });
+
+    it('reports 0 cost when duration is absent (non-verbose_json response)', async () => {
+      const transcribe = vi.fn().mockResolvedValue({ text: 'hello' });
+      const fakeClient = { audio: { transcriptions: { create: transcribe } } };
+      const wrapped = wrapOpenAIClient(fakeClient);
+
+      const response = await wrapped.audio.transcriptions.create({
+        model: 'whisper-1',
+        file: 'fake',
+      } as object);
+      expect(response).toEqual({ text: 'hello' });
+
+      await _flushForTests();
+      const payload = JSON.parse(fetchMock.mock.calls[0]![1].body);
+      expect(payload.cost_usd).toBe(0);
+      expect(payload.input_tokens).toBe(0);
+    });
+  });
+
   it('model override: surgeModel rewrites model and emits requested_model', async () => {
     // Override-aware mock: response.model echoes the actually-called model,
     // matching real OpenAI behavior (and what the reporter reads).

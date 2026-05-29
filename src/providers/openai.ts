@@ -1,6 +1,7 @@
 import {
   instrumentMethod,
   instrumentStreamMethod,
+  instrumentAudioMethod,
   getProp,
   toInt,
   type StreamCollector,
@@ -76,9 +77,58 @@ function ensureIncludeUsage(args: object): void {
   a.stream_options = { ...(a.stream_options ?? {}), include_usage: true };
 }
 
+/**
+ * Pull model + audio duration off a transcription/translation response. The
+ * `duration` field (seconds) is only present when the caller sets
+ * response_format="verbose_json"; without it we report the request with 0
+ * duration (cost 0) so the call is still visible.
+ */
+function extractTranscriptionAudio(
+  response: unknown,
+  args: object,
+): { model: string; audioSeconds: number } {
+  const model = (getProp(args, 'model') as string) ?? 'unknown';
+  const duration = getProp(response, 'duration');
+  return {
+    model,
+    audioSeconds: typeof duration === 'number' ? duration : 0,
+  };
+}
+
 export function wrapOpenAIClient<T extends OpenAILike>(client: T): T {
   return new Proxy(client, {
     get(target, prop, receiver) {
+      if (prop === 'audio') {
+        const audio = Reflect.get(target, prop, receiver) as Record<string, unknown>;
+        return new Proxy(audio, {
+          get(audioTarget, audioProp, audioReceiver) {
+            if (audioProp === 'transcriptions') {
+              const transcriptions = Reflect.get(
+                audioTarget,
+                audioProp,
+                audioReceiver,
+              ) as { create: (args: object) => Promise<unknown>; [k: string]: unknown };
+              return new Proxy(transcriptions, {
+                get(tTarget, tProp, tReceiver) {
+                  if (tProp === 'create') {
+                    const realCreate = (
+                      tTarget.create as (args: object) => Promise<unknown>
+                    ).bind(tTarget);
+                    return instrumentAudioMethod(
+                      'openai',
+                      realCreate,
+                      tTarget,
+                      extractTranscriptionAudio,
+                    );
+                  }
+                  return Reflect.get(tTarget, tProp, tReceiver);
+                },
+              });
+            }
+            return Reflect.get(audioTarget, audioProp, audioReceiver);
+          },
+        });
+      }
       if (prop === 'chat') {
         const chat = Reflect.get(target, prop, receiver) as OpenAIChat;
         return new Proxy(chat, {

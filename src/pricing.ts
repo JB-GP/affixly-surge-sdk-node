@@ -33,6 +33,35 @@ export const PRICING: Record<Provider, Record<string, Rate>> = {
 
 export const DEFAULT_PRICING: Rate = [3.0, 15.0];
 
+// Audio transcription/translation pricing (USD per minute of audio). Billed by
+// duration, not tokens — a separate model from PRICING above.
+export const AUDIO_PRICING: Record<string, Record<string, number>> = {
+  openai: {
+    'whisper-1': 0.006,
+    'gpt-4o-transcribe': 0.006,
+    'gpt-4o-mini-transcribe': 0.003,
+  },
+};
+
+export const DEFAULT_AUDIO_RATE = 0.006;
+
+export function estimateAudioCost(
+  provider: Provider | string,
+  model: string,
+  audioSeconds: number,
+): number {
+  const table = AUDIO_PRICING[provider as Provider] ?? {};
+  const entries = Object.entries(table).sort((a, b) => b[0].length - a[0].length);
+  let rate = DEFAULT_AUDIO_RATE;
+  for (const [key, r] of entries) {
+    if (model.includes(key)) {
+      rate = r;
+      break;
+    }
+  }
+  return (Math.max(audioSeconds, 0) / 60) * rate;
+}
+
 export function estimateCost(
   provider: Provider | string,
   model: string,

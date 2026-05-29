@@ -82,11 +82,15 @@ export function reportUsage(
   outputTokens: number,
   tags?: Record<string, string> | null,
   requestedModel?: string,
+  costOverride?: number,
 ): void {
   const cfg = getConfig();
   if (!cfg.surgeApiUrl) return;
 
-  const cost = estimateCost(provider, model, inputTokens, outputTokens);
+  // costOverride lets callers (e.g. the audio/transcription path) supply a
+  // precomputed cost that isn't token-based; otherwise estimate from tokens.
+  const cost =
+    costOverride !== undefined ? costOverride : estimateCost(provider, model, inputTokens, outputTokens);
   if (!Number.isFinite(cost)) {
     logger.warn(`Cost estimate is not finite (model=${model}), skipping report`);
     return;

@@ -1,7 +1,7 @@
 import { getConfig } from '../config.js';
 import { reportUsage } from '../reporter.js';
 import { logger } from '../utils.js';
-import type { Provider } from '../pricing.js';
+import { estimateAudioCost, type Provider } from '../pricing.js';
 
 export interface SurgeOptions {
   surgeTags?: Record<string, string>;
@@ -84,6 +84,37 @@ export function instrumentMethod<TArgs extends object, TResult>(
       }
     } catch (err) {
       logger.debug(`Failed to extract usage from ${provider} response`, err);
+    }
+
+    return response;
+  };
+}
+
+/**
+ * Audio counterpart to instrumentMethod, for transcription/translation calls
+ * that bill per audio-minute instead of per token. The extractor pulls the
+ * model + audio duration (seconds) off the response; cost is computed from the
+ * per-minute audio pricing table and reported with 0 tokens.
+ */
+export function instrumentAudioMethod<TArgs extends object, TResult>(
+  provider: Provider,
+  realMethod: (args: TArgs) => Promise<TResult>,
+  thisArg: unknown,
+  extractAudio: (response: unknown, args: object) => { model: string; audioSeconds: number } | null,
+): (args: TArgs & SurgeOptions) => Promise<TResult> {
+  return async (args: TArgs & SurgeOptions): Promise<TResult> => {
+    const { cleanedArgs, surgeTags } = prepareCallArgs(args);
+
+    const response = await realMethod.call(thisArg, cleanedArgs as TArgs);
+
+    try {
+      const info = extractAudio(response, cleanedArgs);
+      if (info) {
+        const cost = estimateAudioCost(provider, info.model, info.audioSeconds);
+        reportUsage(provider, info.model, 0, 0, surgeTags, undefined, cost);
+      }
+    } catch (err) {
+      logger.debug(`Failed to extract audio usage from ${provider} response`, err);
     }
 
     return response;
