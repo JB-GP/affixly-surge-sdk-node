@@ -86,6 +86,35 @@ a "Savings from model overrides" card showing the cost delta over time.
 `surgeModel` and `surgeTags` are both stripped from the request before it
 reaches the provider SDK.
 
+## Product event tracking
+
+Beyond AI cost, you can record arbitrary product events (sign-ups, feature
+usage, conversions) against the same product line and tenant model:
+
+```ts
+import { configure, track } from 'affixly-surge-sdk';
+
+configure({
+  surgeApiUrl: 'https://your-surge-backend-url',
+  surgeApiKey: 'surge_sk_your_key_here',
+  productLine: 'parse',
+});
+
+track('parse.repo.connected', 'github_username_or_user_id', {
+  repo: 'owner/repo',
+  language: 'python',
+});
+```
+
+- `track(event, tenant, properties?)` POSTs `{ event, tenant, product, properties }`
+  to `${surgeApiUrl}/api/track`, where `product` is the configured `productLine`.
+- `tenant` is the stable identifier for the acting user/tenant; `properties` is
+  optional arbitrary metadata.
+- Same fire-and-forget guarantees as cost reporting: `track()` returns
+  immediately, never throws, and drops the event silently if Surge is
+  unreachable. If you call `track()` before `configure()`, it logs a warning and
+  returns without sending.
+
 ## Environment variables
 
 The same config keys can be set via env vars as fallback:

@@ -1,9 +1,11 @@
 import { getConfig } from './config.js';
 import { estimateCost, type Provider } from './pricing.js';
 import { logger, truncate } from './utils.js';
+import { enqueue } from './transport.js';
 
-const MAX_WORKERS = 4;
-const REQUEST_TIMEOUT_MS = 5000;
+// Re-exported so existing test imports (`from '../src/reporter.js'`) keep working
+// now that the queue machinery lives in transport.ts.
+export { _flushForTests } from './transport.js';
 
 export interface UsageEventPayload {
   provider: string;
@@ -17,62 +19,6 @@ export interface UsageEventPayload {
   customer_id: string | null;
   requested_model?: string;
   requested_cost_usd?: number;
-}
-
-interface PendingJob {
-  url: string;
-  apiKey: string | null;
-  payload: UsageEventPayload;
-}
-
-const queue: PendingJob[] = [];
-const inFlight = new Set<Promise<void>>();
-let exitHookRegistered = false;
-
-function registerExitHook(): void {
-  if (exitHookRegistered) return;
-  exitHookRegistered = true;
-  process.on('beforeExit', () => {
-    drain();
-  });
-}
-
-function drain(): void {
-  while (queue.length > 0 && inFlight.size < MAX_WORKERS) {
-    const job = queue.shift()!;
-    const p = sendJob(job)
-      .catch((err) => {
-        logger.debug('Surge event report failed', err);
-      })
-      .finally(() => {
-        inFlight.delete(p);
-        if (queue.length > 0) drain();
-      });
-    inFlight.add(p);
-  }
-}
-
-async function sendJob(job: PendingJob): Promise<void> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-  try {
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (job.apiKey) headers['Authorization'] = `Bearer ${job.apiKey}`;
-
-    const response = await fetch(`${job.url.replace(/\/+$/, '')}/api/events`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(job.payload),
-      redirect: 'error',
-      signal: controller.signal,
-    });
-
-    if (!response.ok) {
-      logger.debug(`Surge event report returned status ${response.status}`);
-    }
-  } finally {
-    clearTimeout(timeout);
-  }
 }
 
 export function reportUsage(
@@ -121,27 +67,10 @@ export function reportUsage(
     }
   }
 
-  const job: PendingJob = {
+  enqueue({
     url: cfg.surgeApiUrl,
+    path: '/api/events',
     apiKey: cfg.surgeApiKey,
     payload,
-  };
-
-  registerExitHook();
-
-  setImmediate(() => {
-    queue.push(job);
-    drain();
   });
-}
-
-export async function _flushForTests(): Promise<void> {
-  await new Promise((resolve) => setImmediate(resolve));
-  while (queue.length > 0 || inFlight.size > 0) {
-    if (inFlight.size > 0) {
-      await Promise.allSettled(Array.from(inFlight));
-    } else {
-      await new Promise((resolve) => setImmediate(resolve));
-    }
-  }
 }

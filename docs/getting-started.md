@@ -170,7 +170,45 @@ model overrides" card with the cost delta this month.
 - The SDK does not block or rate-limit based on tier. That's app logic.
 - The SDK does not match model names by regex or wildcard. Exact match only.
 
-## 6. Operational guarantees
+## 6. Product event tracking
+
+Cost reporting answers "how much did AI usage cost?" — `track()` answers "what
+did users do?". It records arbitrary product events against the same product
+line and tenant identity, so spend and behavior live in one place.
+
+```ts
+import { configure, track } from 'affixly-surge-sdk';
+
+configure({
+  surgeApiUrl: process.env.SURGE_API_URL!,
+  surgeApiKey: process.env.SURGE_SDK_KEY!,
+  productLine: 'parse',
+});
+
+track('parse.repo.connected', 'github_username_or_user_id', {
+  repo: 'owner/repo',
+  language: 'python',
+});
+```
+
+This POSTs to `{surgeApiUrl}/api/track`:
+
+```json
+{
+  "event": "parse.repo.connected",
+  "tenant": "github_username_or_user_id",
+  "product": "parse",
+  "properties": { "repo": "owner/repo", "language": "python" }
+}
+```
+
+- `product` is the configured `productLine` (`null` if unset).
+- `tenant` is the stable identifier for the acting user/tenant.
+- `properties` is optional arbitrary metadata; when omitted it is sent as `{}`.
+- Same operational guarantees as cost reporting (next section): fire-and-forget, bounded concurrency, 5s timeout, drained on exit, silent on failure.
+- Calling `track()` before `configure()` (no `surgeApiUrl`) logs a warning and sends nothing.
+
+## 7. Operational guarantees
 
 - **Fire-and-forget.** The provider call resolves before the report is sent. The caller never waits.
 - **Failures are silent for the caller.** Network errors, non-2xx responses, and timeouts are logged at debug level. Your application is never affected.
@@ -180,7 +218,7 @@ model overrides" card with the cost delta this month.
 - **Graceful shutdown.** A `beforeExit` hook tries to drain pending reports.
 - **HTTPS in production.** Non-HTTPS `surgeApiUrl` logs a warning unless the host is `localhost` or `127.0.0.1`.
 
-## 7. Roll back
+## 8. Roll back
 
 To stop tracking a particular call site, swap the import back to the real SDK:
 
@@ -196,7 +234,7 @@ const client = new Anthropic({ apiKey: '...' });
 
 No further code changes required.
 
-## 8. Streaming
+## 9. Streaming
 
 Streaming is fully tracked as of 0.3.0. Same `surgeTags` + `surgeModel` work; usage is captured as chunks flow through and reported when iteration completes.
 
@@ -235,7 +273,7 @@ for await (const chunk of stream) { /* ... */ }
 - For Anthropic, both `messages.create({ stream: true })` (the `Stream` shape) and `messages.stream({})` (the `MessageStream` shape with `.finalMessage()`, `.on('text', cb)`, etc.) are tracked. Helper methods on the latter are preserved by the wrapping Proxy.
 - Early `break` from iteration still reports whatever was collected — partial usage is correct usage.
 
-## 9. Not in v1
+## 10. Not in v1
 
 - Browser / edge runtime build. Node 18+ only.
 - Stripe integration (lives on the Surge backend, not the SDK).
