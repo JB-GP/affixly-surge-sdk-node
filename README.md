@@ -171,6 +171,8 @@ No other code changes required.
 
 Full guide: [`docs/getting-started.md`](docs/getting-started.md).
 
+**Integrating with a coding agent?** Point Claude Code, Cursor, or Copilot at [`AGENTS.md`](AGENTS.md) — a step-by-step integration guide that has the agent confirm your product line and customer identifier before writing any code.
+
 ## License
 
 MIT
