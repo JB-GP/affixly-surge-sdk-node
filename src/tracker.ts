@@ -51,3 +51,36 @@ export function track(
     payload,
   });
 }
+
+/**
+ * Report a quota event to Surge (spec §1.5) — a convenience wrapper around
+ * {@link track} for the other products to use.
+ *
+ * `kind` is `'ceiling_hit'` or `'limit_hit'` (or a full `'quota.*'` event name).
+ * The event is scoped/named by `customerId`. `plan` plus any extra `fields`
+ * (`spend_usd`, `ceiling_usd`, `unit`, `used`, `limit`, …) are passed through as
+ * event properties; null/undefined values are dropped. Fire-and-forget.
+ *
+ * @example
+ * trackQuotaEvent('ceiling_hit', 'forge', 'cust_42', 'maker',
+ *   { spend_usd: 9.12, ceiling_usd: 9.0 });
+ */
+export function trackQuotaEvent(
+  kind: 'ceiling_hit' | 'limit_hit' | string,
+  productLine: string,
+  customerId: string,
+  plan?: string | null,
+  fields: Record<string, unknown> = {},
+): void {
+  const event = String(kind).startsWith('quota.') ? kind : `quota.${kind}`;
+  const properties: Record<string, unknown> = {
+    product_line: productLine,
+    customer_id: customerId,
+    plan,
+    ...fields,
+  };
+  for (const key of Object.keys(properties)) {
+    if (properties[key] === undefined || properties[key] === null) delete properties[key];
+  }
+  track(event, String(customerId ?? productLine ?? 'unknown'), properties);
+}

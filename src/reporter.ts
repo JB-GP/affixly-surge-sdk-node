@@ -17,6 +17,8 @@ export interface UsageEventPayload {
   product_line: string | null;
   feature: string | null;
   customer_id: string | null;
+  /** `plan` tag (spec §4.2): the customer's plan, for per-plan cost attribution. */
+  plan: string | null;
   requested_model?: string;
   requested_cost_usd?: number;
 }
@@ -54,6 +56,7 @@ export function reportUsage(
     product_line: truncate(cfg.productLine),
     feature: truncate(mergedTags['feature']),
     customer_id: truncate(mergedTags['customer_id']),
+    plan: truncate(mergedTags['plan']),
   };
 
   if (requestedModel) {

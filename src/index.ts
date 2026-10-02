@@ -1,8 +1,11 @@
 export { configure, getConfig } from './config.js';
 export type { SurgeConfig, ConfigureOptions } from './config.js';
 
-export { track } from './tracker.js';
+export { track, trackQuotaEvent } from './tracker.js';
 export type { TrackEventPayload } from './tracker.js';
+
+export { flush, setDiagnostics } from './transport.js';
+export { version } from './version.js';
 
 import { Anthropic } from './providers/anthropic.js';
 import { OpenAI } from './providers/openai.js';

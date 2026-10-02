@@ -171,6 +171,10 @@ response = client.messages.create(
 Streaming calls take the same tags — usage is captured as chunks flow and
 reported when iteration finishes.
 
+Besides `feature` and `customer_id`, a `plan` tag (spec §4.2) is recognized and
+forwarded for per-plan cost attribution. Add it when the app has a plan/tier
+concept: `surgeTags: { feature: 'chat', customer_id: session.user.id, plan: 'business' }`.
+
 ---
 
 ## STEP 5 (optional) — Record product events with `track()`
@@ -217,16 +221,33 @@ developer for the tier→model mapping before adding this — don't assume one.
 - **Don't wrap** clients before `configure()` runs.
 - **Don't block on Surge.** It's fire-and-forget by design; never `await` it in
   a way that gates the user response, and never add try/catch that changes app
-  behavior on Surge failure.
+  behavior on Surge failure. The one exception is **serverless** (Lambda,
+  Vercel, Cloud Functions): the process can freeze before the `beforeExit` drain
+  runs, so call `await flush()` (Node) at the *end* of the invocation, after the
+  response is ready. See the process-lifecycle section of `docs/getting-started.md`.
 - **Don't** reuse a single tag value across customers (e.g. `customer_id:
   'user'`). That collapses all attribution into one bucket.
 
 ## Rolling back
 
-To untrack a call site, swap the import back to the real provider SDK. No other
-changes needed:
+To untrack a call site, swap the import back to the real provider SDK **and
+remove the Surge-only options from that call site**. The wrapper recognizes
+`surgeTags` and `surgeModel` and strips them before calling the provider; a bare
+provider client does not, so if you leave them in place the provider receives
+unknown parameters and rejects the request. (This matches the removal guidance
+in `docs/getting-started.md`.)
+
 ```ts
-import Anthropic from '@anthropic-ai/sdk';   // was: import { anthropic } from 'affixly-surge-sdk'
+// was: import { anthropic } from 'affixly-surge-sdk';
+import Anthropic from '@anthropic-ai/sdk';
+const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+const response = await client.messages.create({
+  model: 'claude-sonnet-4-6',
+  max_tokens: 1024,
+  messages: [{ role: 'user', content: userInput }],
+  // ⬅ also delete surgeTags / surgeModel here — the bare SDK will reject them
+});
 ```
 
 ## Reference

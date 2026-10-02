@@ -58,6 +58,7 @@ describe('reporter', () => {
       product_line: 'my-app',
       feature: 'chat',
       customer_id: 'cust_abc',
+      plan: null,
     });
   });
 
