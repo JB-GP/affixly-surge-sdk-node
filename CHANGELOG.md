@@ -3,6 +3,18 @@
 All notable changes to `affixly-surge-sdk` (Node) are documented here. This
 project follows [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+- `flush(timeoutMs)` no longer holds the process open after it resolves. The
+  deadline timer it raced against the in-flight sends was never cleared, so a
+  short-lived script that awaited `flush(30000)` stayed alive for the full 30s
+  after its reports had already been sent. The timer is now cleared when the
+  sends settle and `unref()`'d so it can never keep the event loop alive.
+- `trackQuotaEvent()` now sends the event's top-level `product` as its
+  `productLine` argument instead of always using the `productLine` from
+  `configure()`. Falls back to the configured value when it is empty.
+
 ## [0.7.0] — 2026-10-01
 
 ### Added

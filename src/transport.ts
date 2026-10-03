@@ -140,10 +140,21 @@ export async function flush(timeoutMs?: number): Promise<boolean> {
     if (inFlight.size > 0) {
       const settle = Promise.allSettled(Array.from(inFlight));
       if (deadline !== undefined) {
-        await Promise.race([
-          settle,
-          new Promise((resolve) => setTimeout(resolve, Math.max(deadline - Date.now(), 0))),
-        ]);
+        // Clear the deadline timer when the sends settle first, and unref it so
+        // it can never hold the process open on its own. A leftover timer kept a
+        // short-lived script alive for the full timeout after flush() returned.
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await Promise.race([
+            settle,
+            new Promise((resolve) => {
+              timer = setTimeout(resolve, Math.max(deadline - Date.now(), 0));
+              (timer as { unref?: () => void }).unref?.();
+            }),
+          ]);
+        } finally {
+          if (timer !== undefined) clearTimeout(timer);
+        }
       } else {
         await settle;
       }

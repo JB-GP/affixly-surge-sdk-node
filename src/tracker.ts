@@ -28,6 +28,16 @@ export function track(
   tenant: string,
   properties?: Record<string, unknown>,
 ): void {
+  sendTrack(event, tenant, properties);
+}
+
+/** track() with an optional per-event `product`; falls back to `productLine`. */
+function sendTrack(
+  event: string,
+  tenant: string,
+  properties?: Record<string, unknown>,
+  product?: string | null,
+): void {
   const cfg = getConfig();
   if (!cfg.surgeApiUrl) {
     logger.warn(
@@ -40,7 +50,7 @@ export function track(
   const payload: TrackEventPayload = {
     event,
     tenant,
-    product: cfg.productLine,
+    product: product || cfg.productLine,
     properties: properties ?? {},
   };
 
@@ -82,5 +92,8 @@ export function trackQuotaEvent(
   for (const key of Object.keys(properties)) {
     if (properties[key] === undefined || properties[key] === null) delete properties[key];
   }
-  track(event, String(customerId ?? productLine ?? 'unknown'), properties);
+  // The event's top-level `product` is this productLine, not only the globally
+  // configured one, so a shared service reporting quota events for several
+  // products attributes each to the right product.
+  sendTrack(event, String(customerId ?? productLine ?? 'unknown'), properties, productLine);
 }
